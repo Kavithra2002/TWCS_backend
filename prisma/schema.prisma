@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+  VIEWER
+}
+
+enum TroughStatus {
+  IDLE
+  RUNNING
+  MAINTENANCE
+  OFFLINE
+}
+
+enum SensorType {
+  AIR_TEMPERATURE
+  LEAF_TEMPERATURE
+  HUMIDITY
+  LEAF_MOISTURE
+  AIRFLOW
+  FAN_SPEED
+  LEAF_WEIGHT
+}
+
+enum BatchStatus {
+  PLANNED
+  WITHERING
+  COMPLETED
+  ABORTED
+}
+
+enum ScheduleAction {
+  WITHERING_CYCLE
+  FAN_ON
+  HEATER_ON
+  REVERSE_AIRFLOW
+  LEAF_TURNING
+  MAINTENANCE
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+// ---------- users module ----------
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  name               String
+  passwordHash       String
+  role               Role     @default(OPERATOR)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  acknowledgedAlerts Alert[]
+}
+
+// ---------- factories module ----------
+model Factory {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  location  String?
+  createdAt DateTime @default(now())
+  troughs   Trough[]
+}
+
+// ---------- troughs module ----------
+model Trough {
+  id         String       @id @default(cuid())
+  code       String       @unique
+  name       String
+  factoryId  String
+  factory    Factory      @relation(fields: [factoryId], references: [id])
+  capacityKg Float
+  status     TroughStatus @default(IDLE)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  sensors    Sensor[]
+  batches    Batch[]
+  schedules  Schedule[]
+  alerts     Alert[]
+
+  @@index([factoryId])
+}
+
+// ---------- sensors module ----------
+model Sensor {
+  id           String     @id @default(cuid())
+  troughId     String
+  trough       Trough     @relation(fields: [troughId], references: [id], onDelete: Cascade)
+  type         SensorType
+  label        String
+  unit         String
+  minThreshold Float?
+  maxThreshold Float?
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  readings     Reading[]
+  alerts       Alert[]
+
+  @@unique([troughId, type])
+}
+
+// ---------- telemetry module ----------
+model Reading {
+  id         BigInt   @id @default(autoincrement())
+  sensorId   String
+  sensor     Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+  value      Float
+  recordedAt DateTime @default(now())
+
+  @@index([sensorId, recordedAt])
+}
+
+// ---------- batches module ----------
+model Batch {
+  id              String      @id @default(cuid())
+  code            String      @unique
+  troughId        String
+  trough          Trough      @relation(fields: [troughId], references: [id])
+  leafIntakeKg    Float
+  initialMoisture Float
+  targetMoisture  Float
+  finalMoisture   Float?
+  status          BatchStatus @default(PLANNED)
+  plannedStartAt  DateTime?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([troughId, status])
+}
+
+// ---------- schedules module ----------
+model Schedule {
+  id         String         @id @default(cuid())
+  troughId   String
+  trough     Trough         @relation(fields: [troughId], references: [id], onDelete: Cascade)
+  name       String
+  action     ScheduleAction
+  startTime  String // "HH:mm" in factory local time
+  endTime    String // "HH:mm"
+  daysOfWeek Int[] // 0 = Sunday ... 6 = Saturday
+  setpoint   Float? // e.g. target air temperature for HEATER_ON
+  enabled    Boolean        @default(true)
+  lastRunAt  DateTime?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@index([troughId])
+}
+
+// ---------- alerts module ----------
+model Alert {
+  id               String        @id @default(cuid())
+  troughId         String
+  trough           Trough        @relation(fields: [troughId], references: [id], onDelete: Cascade)
+  sensorId         String?
+  sensor           Sensor?       @relation(fields: [sensorId], references: [id], onDelete: SetNull)
+  severity         AlertSeverity
+  message          String
+  value            Float?
+  acknowledged     Boolean       @default(false)
+  acknowledgedById String?
+  acknowledgedBy   User?         @relation(fields: [acknowledgedById], references: [id])
+  acknowledgedAt   DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@index([troughId, createdAt])
+  @@index([acknowledged])
+}
