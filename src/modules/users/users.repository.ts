@@ -8,6 +8,7 @@ const publicSelect = {
   role: true,
   isActive: true,
   createdAt: true,
+  updatedAt: true,
 } satisfies Prisma.UserSelect;
 
 export const usersRepository = {
