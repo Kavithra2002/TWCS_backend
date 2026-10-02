@@ -4,16 +4,32 @@ import { SENSOR_DEFAULTS } from '../src/modules/sensors/sensor-defaults';
 
 const prisma = new PrismaClient();
 
-// Development-only credentials. Change before deploying anywhere real.
-const ADMIN_EMAIL = 'admin@twcs.local';
-const ADMIN_PASSWORD = 'Admin@12345';
+// First account. Sign in with the email and this password.
+const SUPER_ADMIN = {
+  id: '001',
+  email: 'testuser001@gmail.com',
+  name: 'kavithra methnula',
+  password: 'testuser001',
+  role: 'super_admin',
+};
 
 async function main() {
-  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+  const passwordHash = await bcrypt.hash(SUPER_ADMIN.password, 10);
   await prisma.user.upsert({
-    where: { email: ADMIN_EMAIL },
-    update: {},
-    create: { email: ADMIN_EMAIL, name: 'System Admin', passwordHash, role: 'ADMIN' },
+    where: { email: SUPER_ADMIN.email },
+    update: {
+      name: SUPER_ADMIN.name,
+      role: SUPER_ADMIN.role,
+      passwordHash,
+      isActive: true,
+    },
+    create: {
+      id: SUPER_ADMIN.id,
+      email: SUPER_ADMIN.email,
+      name: SUPER_ADMIN.name,
+      role: SUPER_ADMIN.role,
+      passwordHash,
+    },
   });
 
   const factory = await prisma.factory.upsert({
@@ -82,7 +98,7 @@ async function main() {
     }
   }
 
-  console.log(`Seed complete. Login: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(`Seed complete. Super admin: ${SUPER_ADMIN.email}`);
 }
 
 main()
