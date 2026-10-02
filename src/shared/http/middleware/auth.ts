@@ -1,6 +1,5 @@
 import type { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
-import type { Role } from '@prisma/client';
 import { env } from '../../../config/env';
 import { forbidden, unauthorized } from '../errors';
 
@@ -8,7 +7,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  role: Role;
+  role: string;
 }
 
 declare global {
@@ -43,13 +42,13 @@ export const authenticate: RequestHandler = (req, _res, next) => {
   }
 };
 
-/** Restricts a route to the given roles. Use after `authenticate`. */
+/** Restricts a route to the given roles. A super admin can use every route. */
 export const authorize =
-  (...roles: Role[]): RequestHandler =>
+  (...roles: string[]): RequestHandler =>
   (req, _res, next) => {
     if (!req.user) return next(unauthorized());
-    if (!roles.includes(req.user.role)) return next(forbidden());
-    next();
+    if (req.user.role === 'super_admin' || roles.includes(req.user.role)) return next();
+    return next(forbidden());
   };
 
 /** Authenticates IoT gateways posting telemetry. */
