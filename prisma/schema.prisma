@@ -7,13 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  ADMIN
-  SUPERVISOR
-  OPERATOR
-  VIEWER
-}
-
 enum TroughStatus {
   IDLE
   RUNNING
@@ -55,14 +48,14 @@ enum AlertSeverity {
 
 // ---------- users module ----------
 model User {
-  id                 String   @id @default(cuid())
-  email              String   @unique
-  name               String
-  passwordHash       String
-  role               Role     @default(OPERATOR)
+  id                 String   @id @map("user_id")
+  name               String   @map("user_name")
+  email              String   @unique @map("user_email")
+  role               String   @default("super_admin") @map("user_role")
+  createdAt          DateTime @default(now()) @map("user_created_date")
+  updatedAt          DateTime @updatedAt @map("user_updated_date")
+  passwordHash       String   @map("user_password")
   isActive           Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
   acknowledgedAlerts Alert[]
 }
 
