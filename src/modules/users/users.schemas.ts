@@ -1,17 +1,15 @@
 import { z } from 'zod';
 
-export const roleSchema = z.enum(['ADMIN', 'SUPERVISOR', 'OPERATOR', 'VIEWER']);
-
 export const createUserSchema = z.object({
   email: z.string().email().transform((v) => v.toLowerCase()),
   name: z.string().min(2).max(100),
   password: z.string().min(8).max(128),
-  role: roleSchema.default('OPERATOR'),
+  role: z.string().min(1).max(40).default('super_admin'),
 });
 
 export const updateUserSchema = z.object({
   name: z.string().min(2).max(100).optional(),
-  role: roleSchema.optional(),
+  role: z.string().min(1).max(40).optional(),
   isActive: z.boolean().optional(),
 });
 

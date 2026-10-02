@@ -8,11 +8,11 @@ import { createUserSchema, updateUserSchema } from './users.schemas';
 export const usersRouter = Router();
 
 usersRouter.use(authenticate);
-usersRouter.get('/', authorize('ADMIN', 'SUPERVISOR'), usersController.list);
-usersRouter.post('/', authorize('ADMIN'), validate({ body: createUserSchema }), usersController.create);
+usersRouter.get('/', authorize('super_admin'), usersController.list);
+usersRouter.post('/', authorize('super_admin'), validate({ body: createUserSchema }), usersController.create);
 usersRouter.patch(
   '/:id',
-  authorize('ADMIN'),
+  authorize('super_admin'),
   validate({ params: idParamSchema, body: updateUserSchema }),
   usersController.update,
 );
