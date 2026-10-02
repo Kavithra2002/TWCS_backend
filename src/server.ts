@@ -6,8 +6,22 @@ import { prisma } from './shared/database/prisma';
 import { closeRealtime, initRealtime } from './shared/realtime/socket';
 import { modules } from './modules';
 
+async function checkDatabase(): Promise<boolean> {
+  try {
+    await prisma.$connect();
+    await prisma.$queryRaw`SELECT 1`;
+    logger.info('DB is connected');
+    return true;
+  } catch (err) {
+    logger.error('DB is not connected');
+    logger.fatal({ err }, 'Database connection failed');
+    return false;
+  }
+}
+
 async function bootstrap() {
-  await prisma.$connect();
+  const dbOk = await checkDatabase();
+  if (!dbOk) process.exit(1);
 
   const app = createApp();
   const server = http.createServer(app);
