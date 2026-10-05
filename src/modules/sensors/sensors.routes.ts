@@ -12,7 +12,7 @@ sensorsRouter.get('/', validate({ query: listSensorsQuerySchema }), sensorsContr
 sensorsRouter.get('/:id', validate({ params: idParamSchema }), sensorsController.get);
 sensorsRouter.patch(
   '/:id',
-  authorize('ADMIN', 'SUPERVISOR'),
+  authorize('ADMIN', 'SUPERVISOR', 'executive', 'engineering'),
   validate({ params: idParamSchema, body: updateSensorSchema }),
   sensorsController.update,
 );

@@ -11,7 +11,7 @@ alertsRouter.use(authenticate);
 alertsRouter.get('/', validate({ query: listAlertsQuerySchema }), alertsController.list);
 alertsRouter.post(
   '/:id/acknowledge',
-  authorize('ADMIN', 'SUPERVISOR', 'OPERATOR'),
+  authorize('ADMIN', 'SUPERVISOR', 'OPERATOR', 'executive', 'operation', 'engineering'),
   validate({ params: idParamSchema }),
   alertsController.acknowledge,
 );

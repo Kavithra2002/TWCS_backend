@@ -57,6 +57,7 @@ model User {
   passwordHash       String   @map("user_password")
   isActive           Boolean  @default(true)
   acknowledgedAlerts Alert[]
+  screenAssignments  UserScreen[]
 }
 
 // ---------- factories module ----------
@@ -175,4 +176,42 @@ model Alert {
 
   @@index([troughId, createdAt])
   @@index([acknowledged])
+}
+
+// ---------- master-data module ----------
+model Screen {
+  id          String       @id @default(cuid())
+  code        String       @unique
+  name        String
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  views       ScreenView[]
+  assignments UserScreen[]
+}
+
+model ScreenView {
+  id          String   @id @default(cuid())
+  screenId    String
+  screen      Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  code        String
+  name        String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([screenId, code])
+  @@index([screenId])
+}
+
+model UserScreen {
+  userId     String
+  screenId   String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  screen     Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@id([userId, screenId])
+  @@index([screenId])
 }
