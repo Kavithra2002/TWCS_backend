@@ -15,7 +15,8 @@ export const usersService = {
   async create(input: CreateUserInput) {
     if (await usersRepository.findByEmailWithHash(input.email)) throw conflict('Email already in use');
     const passwordHash = await bcrypt.hash(input.password, 10);
-    return usersRepository.create({ email: input.email, name: input.name, role: input.role, passwordHash });
+    const id = await usersRepository.nextId();
+    return usersRepository.create({ id, email: input.email, name: input.name, role: input.role, passwordHash });
   },
 
   async update(id: string, input: UpdateUserInput) {
