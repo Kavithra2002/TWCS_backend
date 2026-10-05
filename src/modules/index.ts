@@ -4,6 +4,7 @@ import { authModule } from './auth';
 import { batchesModule } from './batches';
 import { dashboardModule } from './dashboard';
 import { factoriesModule } from './factories';
+import { masterDataModule } from './master-data';
 import { schedulesModule } from './schedules';
 import { sensorsModule } from './sensors';
 import { simulatorModule } from './simulator';
@@ -17,6 +18,7 @@ import { usersModule } from './users';
  */
 export const modules: AppModule[] = [
   usersModule,
+  masterDataModule,
   authModule,
   factoriesModule,
   sensorsModule,
