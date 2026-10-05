@@ -11,7 +11,7 @@ import {
 } from './batches.schemas';
 
 export const batchesRouter = Router();
-const operators = authorize('ADMIN', 'SUPERVISOR', 'OPERATOR');
+const operators = authorize('ADMIN', 'SUPERVISOR', 'OPERATOR', 'executive', 'operation', 'engineering');
 
 batchesRouter.use(authenticate);
 batchesRouter.get('/', validate({ query: listBatchesQuerySchema }), batchesController.list);

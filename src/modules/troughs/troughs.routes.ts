@@ -18,13 +18,13 @@ troughsRouter.get('/:id', validate({ params: idParamSchema }), troughsController
 troughsRouter.post('/', authorize('ADMIN'), validate({ body: createTroughSchema }), troughsController.create);
 troughsRouter.patch(
   '/:id',
-  authorize('ADMIN', 'SUPERVISOR'),
+  authorize('ADMIN', 'SUPERVISOR', 'executive', 'engineering'),
   validate({ params: idParamSchema, body: updateTroughSchema }),
   troughsController.update,
 );
 troughsRouter.patch(
   '/:id/status',
-  authorize('ADMIN', 'SUPERVISOR', 'OPERATOR'),
+  authorize('ADMIN', 'SUPERVISOR', 'OPERATOR', 'executive', 'operation', 'engineering'),
   validate({ params: idParamSchema, body: updateTroughStatusSchema }),
   troughsController.setStatus,
 );

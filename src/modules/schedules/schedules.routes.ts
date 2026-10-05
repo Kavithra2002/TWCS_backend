@@ -6,7 +6,7 @@ import { schedulesController } from './schedules.controller';
 import { createScheduleSchema, listSchedulesQuerySchema, updateScheduleSchema } from './schedules.schemas';
 
 export const schedulesRouter = Router();
-const planners = authorize('ADMIN', 'SUPERVISOR');
+const planners = authorize('ADMIN', 'SUPERVISOR', 'executive', 'engineering');
 
 schedulesRouter.use(authenticate);
 schedulesRouter.get('/', validate({ query: listSchedulesQuerySchema }), schedulesController.list);
