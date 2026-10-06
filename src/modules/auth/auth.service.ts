@@ -6,7 +6,7 @@ import type { LoginInput } from './auth.schemas';
 
 // No repository: auth owns no tables and reads users through the users module API.
 export const authService = {
-  async login({ email, password }: LoginInput) {
+  async login({ email, password, remember }: LoginInput) {
     const user = await usersApi.findByEmailWithHash(email);
     if (!user || !user.isActive) throw unauthorized('Invalid email or password');
 
@@ -14,7 +14,7 @@ export const authService = {
     if (!valid) throw unauthorized('Invalid email or password');
 
     const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
-    return { token: signToken(authUser), user: authUser };
+    return { token: signToken(authUser, remember ? '30d' : undefined), user: authUser };
   },
 
   me: (userId: string) => usersApi.getById(userId),

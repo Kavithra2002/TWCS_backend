@@ -19,10 +19,8 @@ declare global {
   }
 }
 
-export function signToken(user: AuthUser): string {
-  return jwt.sign(user, env.JWT_SECRET, {
-    expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
-  });
+export function signToken(user: AuthUser, expiresIn: jwt.SignOptions['expiresIn'] = env.JWT_EXPIRES_IN): string {
+  return jwt.sign(user, env.JWT_SECRET, { expiresIn });
 }
 
 export function verifyToken(token: string): AuthUser {
