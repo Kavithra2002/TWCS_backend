@@ -1,0 +1,90 @@
+[
+  {
+    "event_id": "eab53d57-1ab6-4988-86f4-fdb22749c258",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "Start Session/LoadingStart",
+    "timestamp": "2025-07-23T10:00:00",
+    "user_id": null,
+    "notes": "Auto-logged event: StartSession"
+  },
+  {
+    "event_id": "e2d8de92-ee04-4b22-8d30-acb18fce6263",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "LoadingDone",
+    "timestamp": "2025-07-23T10:10:00",
+    "user_id": null,
+    "notes": "Auto-logged event:LoadingDone"
+  },
+  {
+    "event_id": "0ddb1778-2e47-4c6d-be72-36a1f807037a",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "StartProcess",
+    "timestamp": "2025-07-23T10:16:00",
+    "user_id": "tmaster01",
+    "notes": "User tmaster01 action: StartProcess"
+  },
+  {
+    "event_id": "3cb5b7b6-297f-48a3-8bf9-df7062627a04",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "SMRStart",
+    "timestamp": "2025-07-23T10:20:00",
+    "user_id": null,
+    "notes": "Auto-logged event: SMRStart"
+  },
+  {
+    "event_id": "fc08c97e-71a9-49ab-ad0b-3c099c08091e",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "SMRDone/IMR1Start",
+    "timestamp": "2025-07-23T13:10:00",
+    "user_id": null,
+    "notes": "Auto-logged event: SMRDone/IMR1Start"
+  },
+  {
+    "event_id": "509e4952-d61f-4225-aa5f-0f652ea247b1",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "TurnoverAlert",
+    "timestamp": "2025-07-23T18:40:00",
+    "user_id": null,
+    "notes": "Auto-logged event: TurnoverAlert"
+  },
+  {
+    "event_id": "e2ffff22-ed17-4602-82c0-967418e5d136",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "TurnoverStart",
+    "timestamp": "2025-07-23T18:45:00",
+    "user_id": "tmaster01",
+    "notes": "User tmaster01 action: TurnoverStart"
+  },
+  {
+    "event_id": "d8854b12-6a6b-4fce-b446-5c4dbf4a7cd2",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "TurnoverEnd/IMR2Start",
+    "timestamp": "2025-07-23T19:40:00",
+    "user_id": "tmaster01",
+    "notes": "User tmaster01 action: TurnoverEnd/IMR2Start"
+  },
+  {
+    "event_id": "052dfe07-a164-4e39-8409-82773b05a442",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "IMR2End/WitheringCompletion",
+    "timestamp": "2025-07-23T22:55:00",
+    "user_id": "tmaster01",
+    "notes": "User tmaster01 action: WitheringEnd"
+  },
+  {
+    "event_id": "6cfe1007-6dfc-47b8-beca-d9a2eab1d868",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "UserFeedback/UnloadingStart",
+    "timestamp": "2025-07-23T23:09:00",
+    "user_id": "tmaster01",
+    "notes": "User tmaster01 action: UserFeedback"
+  },
+  {
+    "event_id": "229641e2-0a56-4f39-985b-31efb63520ea",
+    "withering_id": "HATT-WALT-11-20250723-1000",
+    "event_type": "UnloadingEnd/SessionEnd",
+    "timestamp": "2025-07-23T23:55:00",
+    "user_id": null,
+    "notes": "Auto-logged event: UnloadingEnd/SessionEnd"
+  }
+]
