@@ -5,6 +5,9 @@ export const batchStatusSchema = z.enum(['PLANNED', 'WITHERING', 'COMPLETED', 'A
 export const listBatchesQuerySchema = z.object({
   troughId: z.string().optional(),
   status: batchStatusSchema.optional(),
+  /** Inclusive lower bound — match sessions that started, ended, or were planned in range. */
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
