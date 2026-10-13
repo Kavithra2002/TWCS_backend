@@ -23,7 +23,8 @@ const RUNNING_PROFILE: Record<Exclude<SensorType, 'LEAF_MOISTURE' | 'LEAF_WEIGHT
   LEAF_TEMPERATURE: { base: 26.5, noise: 0.3, min: 21, max: 34 },
   HUMIDITY: { base: 72, noise: 1.2, min: 50, max: 95 },
   AIRFLOW: { base: 22000, noise: 350, min: 10000, max: 32000 },
-  FAN_SPEED: { base: 1250, noise: 18, min: 500, max: 1550 },
+  // Keep max within the default alert threshold (1500 rpm) so sim spikes do not raise fan alerts.
+  FAN_SPEED: { base: 1250, noise: 18, min: 500, max: 1480 },
 };
 
 const START_MOISTURE = 78;
