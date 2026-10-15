@@ -9,6 +9,7 @@ import { schedulesModule } from './schedules';
 import { sensorsModule } from './sensors';
 import { simulatorModule } from './simulator';
 import { telemetryModule } from './telemetry';
+import { testVersionModule } from './test-version';
 import { troughsModule } from './troughs';
 import { usersModule } from './users';
 
@@ -29,4 +30,5 @@ export const modules: AppModule[] = [
   alertsModule,
   dashboardModule,
   simulatorModule,
+  testVersionModule,
 ];
