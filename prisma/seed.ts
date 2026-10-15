@@ -40,18 +40,29 @@ async function main() {
 
   const troughCount = 6;
   for (let i = 1; i <= troughCount; i++) {
-    const code = `WT-${String(i).padStart(2, '0')}`;
-    const trough = await prisma.trough.upsert({
-      where: { code },
-      update: {},
-      create: {
-        code,
-        name: `Withering Trough ${i}`,
-        factoryId: factory.id,
-        capacityKg: 1800,
-        status: i <= 4 ? 'RUNNING' : i === 5 ? 'IDLE' : 'MAINTENANCE',
-      },
+    const code = `Trough-${String(i).padStart(2, '0')}`;
+    const legacyCode = `WT-${String(i).padStart(2, '0')}`;
+    const existing = await prisma.trough.findFirst({
+      where: { OR: [{ code }, { code: legacyCode }] },
     });
+    const trough = existing
+      ? await prisma.trough.update({
+          where: { id: existing.id },
+          data: {
+            code,
+            name: `Withering Trough ${i}`,
+            status: i <= 4 ? 'RUNNING' : i === 5 ? 'IDLE' : 'MAINTENANCE',
+          },
+        })
+      : await prisma.trough.create({
+          data: {
+            code,
+            name: `Withering Trough ${i}`,
+            factoryId: factory.id,
+            capacityKg: 1800,
+            status: i <= 4 ? 'RUNNING' : i === 5 ? 'IDLE' : 'MAINTENANCE',
+          },
+        });
 
     for (const s of SENSOR_DEFAULTS) {
       await prisma.sensor.upsert({

@@ -7,6 +7,7 @@ const publicSelect = {
   name: true,
   role: true,
   isActive: true,
+  executiveConfig: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -24,5 +25,6 @@ export const usersRepository = {
     return String(max + 1).padStart(3, '0');
   },
   create: (data: Prisma.UserCreateInput) => prisma.user.create({ data, select: publicSelect }),
-  update: (id: string, data: Prisma.UserUpdateInput) => prisma.user.update({ where: { id }, data, select: publicSelect }),
+  update: (id: string, data: Prisma.UserUpdateInput) =>
+    prisma.user.update({ where: { id }, data, select: publicSelect }),
 };

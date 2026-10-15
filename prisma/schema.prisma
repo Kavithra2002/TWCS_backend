@@ -56,6 +56,8 @@ model User {
   updatedAt          DateTime @updatedAt @map("user_updated_date")
   passwordHash       String   @map("user_password")
   isActive           Boolean  @default(true)
+  /// Executive-only settings: designation, assigned troughs, and extras.
+  executiveConfig    Json?    @map("user_executive_config")
   acknowledgedAlerts Alert[]
   screenAssignments  UserScreen[]
 }
