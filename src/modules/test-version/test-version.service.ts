@@ -31,6 +31,34 @@ export interface DbLiveSnapshot {
   counts: { sessions: number; events: number; time_series: number };
 }
 
+/** One row from droplet `raw_vbox_data` (VNet → subscriber, about every 10s). */
+export interface RawVboxRow {
+  id: number;
+  receivedAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface FeedStatusEvent {
+  at: string;
+  state: 'connected' | 'disconnected';
+  reason: string;
+}
+
+/** Live VNet feed, independent of the local mock publisher. */
+export interface RawLiveFeed {
+  polledAt: string | null;
+  /** SSH tunnel / Postgres query succeeded. */
+  dbConnected: boolean;
+  /** Newest raw row is inside the fresh window (~2× the 10s cadence). */
+  feedConnected: boolean;
+  error: string | null;
+  lastReceivedAt: string | null;
+  ageMs: number | null;
+  count: number;
+  rows: RawVboxRow[];
+  statusLog: FeedStatusEvent[];
+}
+
 export interface PublisherStatus {
   running: boolean;
   connected: boolean;
@@ -47,6 +75,8 @@ export interface PublisherStatus {
   lastSent: { at: string; kind: PublishKind; topic: string; payload: unknown } | null;
   recentSent: PublishLogEntry[];
   db: DbLiveSnapshot;
+  /** VNet samples stored by the droplet subscriber in raw_vbox_data. */
+  live: RawLiveFeed;
   log: PublishLogEntry[];
   tunnelHint: string;
 }
@@ -71,6 +101,12 @@ interface TimeSeriesRow {
 
 const MAX_LOG = 100;
 const TROUGH_IDS = ['t01', 't02', 't03', 't04', 't05', 't06'] as const;
+/** How often to read raw_vbox_data so a 10s insert shows up within a couple of seconds. */
+const RAW_POLL_MS = 2_000;
+/** Feed is "disconnected" when no new raw row has arrived inside this window. */
+const FEED_FRESH_MS = 25_000;
+const RAW_ROW_LIMIT = 40;
+const MAX_STATUS_LOG = 40;
 
 function mocDir(troughId: string) {
   return path.resolve(process.cwd(), 'moc_json', troughId);
@@ -93,6 +129,20 @@ function loadTrough(troughId: string) {
     throw new AppError(400, `Invalid mock data for ${troughId}`);
   }
   return { session, events, timeSeries };
+}
+
+function emptyLive(): RawLiveFeed {
+  return {
+    polledAt: null,
+    dbConnected: false,
+    feedConnected: false,
+    error: null,
+    lastReceivedAt: null,
+    ageMs: null,
+    count: 0,
+    rows: [],
+    statusLog: [],
+  };
 }
 
 function emptyDb(): DbLiveSnapshot {
@@ -128,6 +178,7 @@ function createInitialStatus(): PublisherStatus {
     lastSent: null,
     recentSent: [],
     db: emptyDb(),
+    live: emptyLive(),
     log: [],
     tunnelHint: 'ssh -L 15432:127.0.0.1:5432 root@168.144.35.189',
   };
@@ -141,6 +192,9 @@ let session: SessionRow | null = null;
 let events: EventRow[] = [];
 let timeSeries: TimeSeriesRow[] = [];
 let pool: Pool | null = null;
+let live: RawLiveFeed = emptyLive();
+let rawTimer: ReturnType<typeof setInterval> | null = null;
+let rawPollInFlight = false;
 
 function pushLog(entry: Omit<PublishLogEntry, 'at'> & { at?: string }) {
   const row: PublishLogEntry = { at: entry.at ?? new Date().toISOString(), ...entry };
@@ -251,7 +305,7 @@ function getPool() {
       connectionString: env.VBOX_DATABASE_URL,
       connectionTimeoutMillis: 4000,
       idleTimeoutMillis: 10_000,
-      max: 2,
+      max: 3,
     });
   }
   return pool;
@@ -318,6 +372,121 @@ function startDbPolling() {
   }, env.MQTT_PUBLISH_INTERVAL_MS);
 }
 
+function noteFeedTransition(nextConnected: boolean, reason: string) {
+  if (live.statusLog[0]?.state === (nextConnected ? 'connected' : 'disconnected') && live.polledAt) {
+    return;
+  }
+  // Skip the very first observation so startup does not look like a flap,
+  // unless we already have a log entry (a real change).
+  if (!live.polledAt && live.statusLog.length === 0) {
+    live.statusLog = [
+      {
+        at: new Date().toISOString(),
+        state: nextConnected ? 'connected' : 'disconnected',
+        reason,
+      },
+    ];
+    return;
+  }
+  if (live.feedConnected === nextConnected && live.polledAt) return;
+  live.statusLog = [
+    {
+      at: new Date().toISOString(),
+      state: nextConnected ? 'connected' : 'disconnected',
+      reason,
+    },
+    ...live.statusLog,
+  ].slice(0, MAX_STATUS_LOG);
+}
+
+async function pollRaw() {
+  if (rawPollInFlight) return;
+  rawPollInFlight = true;
+  try {
+    const db = getPool();
+    const [rowsRes, countRes] = await Promise.all([
+      db.query<{ id: number; received_at: string; payload: Record<string, unknown> | string }>(
+        `SELECT id,
+                to_char(received_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS received_at,
+                payload
+         FROM raw_vbox_data
+         ORDER BY id DESC
+         LIMIT $1`,
+        [RAW_ROW_LIMIT],
+      ),
+      db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM raw_vbox_data`),
+    ]);
+
+    const rows: RawVboxRow[] = rowsRes.rows.map((row) => {
+      let payload = row.payload;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload) as Record<string, unknown>;
+        } catch {
+          payload = { raw: payload };
+        }
+      }
+      return {
+        id: Number(row.id),
+        receivedAt: row.received_at,
+        payload: payload ?? {},
+      };
+    });
+
+    const lastReceivedAt = rows[0]?.receivedAt ?? null;
+    const ageMs = lastReceivedAt ? Date.now() - Date.parse(lastReceivedAt) : null;
+    const feedConnected = ageMs != null && ageMs >= -5_000 && ageMs <= FEED_FRESH_MS;
+    const reason = feedConnected
+      ? 'Sample arrived from VNet'
+      : lastReceivedAt
+        ? 'No new sample within 25s'
+        : 'raw_vbox_data is empty';
+
+    noteFeedTransition(feedConnected, reason);
+
+    live = {
+      ...live,
+      polledAt: new Date().toISOString(),
+      dbConnected: true,
+      feedConnected,
+      error: null,
+      lastReceivedAt,
+      ageMs,
+      count: countRes.rows[0]?.n ?? rows.length,
+      rows,
+      statusLog: live.statusLog,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'DB poll failed';
+    noteFeedTransition(false, 'Database unreachable');
+    live = {
+      ...live,
+      polledAt: new Date().toISOString(),
+      dbConnected: false,
+      feedConnected: false,
+      error: `${message} — open SSH tunnel: ${status.tunnelHint}`,
+      statusLog: live.statusLog,
+    };
+  } finally {
+    rawPollInFlight = false;
+  }
+}
+
+function stopRawTimer() {
+  if (rawTimer) {
+    clearInterval(rawTimer);
+    rawTimer = null;
+  }
+}
+
+function startRawPolling() {
+  if (rawTimer) return;
+  void pollRaw();
+  rawTimer = setInterval(() => {
+    void pollRaw();
+  }, RAW_POLL_MS);
+}
+
 function disconnectClient() {
   stopPublishTimer();
   if (client) {
@@ -350,7 +519,13 @@ export const testVersionService = {
       },
       intervalMs: env.MQTT_PUBLISH_INTERVAL_MS,
       connected: Boolean(client?.connected),
+      live,
     };
+  },
+
+  /** Always read raw_vbox_data, even when the mock publisher is stopped. */
+  onInit() {
+    startRawPolling();
   },
 
   async start(troughId: string) {
@@ -535,6 +710,7 @@ export const testVersionService = {
   onShutdown() {
     disconnectClient();
     stopDbTimer();
+    stopRawTimer();
     void pool?.end();
     pool = null;
   },

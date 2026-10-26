@@ -6,5 +6,6 @@ export const testVersionModule: AppModule = {
   name: 'test-version',
   basePath: 'test-version',
   router: testVersionRouter,
+  onInit: () => testVersionService.onInit(),
   onShutdown: () => testVersionService.onShutdown(),
 };
