@@ -9,6 +9,7 @@ export const testVersionRouter = Router();
 testVersionRouter.use(authenticate);
 testVersionRouter.get('/troughs', testVersionController.troughs);
 testVersionRouter.get('/status', testVersionController.status);
+testVersionRouter.post('/tunnel', testVersionController.openTunnel);
 testVersionRouter.post('/refresh-db', testVersionController.refreshDb);
 const operators = authorize('ADMIN', 'SUPERVISOR', 'OPERATOR', 'executive', 'operation', 'engineering');
 

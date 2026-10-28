@@ -27,4 +27,8 @@ export const testVersionController = {
   refreshDb: asyncHandler(async (_req, res) => {
     res.json(await testVersionService.refreshDb());
   }),
+
+  openTunnel: asyncHandler(async (_req, res) => {
+    res.json(await testVersionService.openTunnel());
+  }),
 };
