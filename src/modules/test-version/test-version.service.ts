@@ -1,5 +1,7 @@
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import mqtt, { type IClientOptions, type MqttClient } from 'mqtt';
 import { Pool, type QueryResultRow } from 'pg';
@@ -459,6 +461,8 @@ async function pollRaw() {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'DB poll failed';
     noteFeedTransition(false, 'Database unreachable');
+    await resetVboxPool();
+    void reopenTunnel();
     live = {
       ...live,
       polledAt: new Date().toISOString(),
@@ -485,6 +489,153 @@ function startRawPolling() {
   rawTimer = setInterval(() => {
     void pollRaw();
   }, RAW_POLL_MS);
+}
+
+const TUNNEL_PORT = 15432;
+const TUNNEL_TARGET = 'root@168.144.35.189';
+const TUNNEL_SPEC = `${TUNNEL_PORT}:127.0.0.1:5432`;
+const TUNNEL_COMMAND = `ssh -f -N -L ${TUNNEL_SPEC} ${TUNNEL_TARGET}`;
+
+function localPortOpen(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const finish = (open: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(800);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function resetVboxPool() {
+  if (!pool) return;
+  const current = pool;
+  pool = null;
+  try {
+    await current.end();
+  } catch {
+    /* drop a pool that failed before the tunnel existed */
+  }
+}
+
+/** Open the droplet forward used by raw_vbox_data. Does not start the JSON publisher. */
+async function openSshTunnel() {
+  if (await localPortOpen(TUNNEL_PORT)) {
+    await resetVboxPool();
+    void pollRaw();
+    return { open: true, alreadyOpen: true, command: TUNNEL_COMMAND };
+  }
+
+  // Windows OpenSSH cannot fork, so -f is dropped and the process is detached.
+  // The forward is the same one the Run button is meant to start.
+  const args = [
+    ...(process.platform === 'win32' ? [] : ['-f']),
+    '-N',
+    '-o',
+    'ExitOnForwardFailure=yes',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=15',
+    '-o',
+    'ServerAliveInterval=30',
+    '-L',
+    TUNNEL_SPEC,
+    TUNNEL_TARGET,
+  ];
+
+  let stderr = '';
+  const child = spawn('ssh', args, {
+    detached: true,
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-600);
+  });
+
+  let settled = false;
+  const opened = await new Promise<boolean>((resolve) => {
+    const finish = (open: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(open);
+    };
+
+    child.once('error', (err) => {
+      stderr = err.message;
+      finish(false);
+    });
+
+    const started = Date.now();
+    const timer = setInterval(() => {
+      void localPortOpen(TUNNEL_PORT).then((open) => {
+        if (open) {
+          clearInterval(timer);
+          finish(true);
+        } else if (Date.now() - started > 12_000) {
+          clearInterval(timer);
+          finish(false);
+        }
+      });
+    }, 400);
+
+    child.once('exit', () => {
+      setTimeout(() => {
+        void localPortOpen(TUNNEL_PORT).then((open) => {
+          if (open) {
+            clearInterval(timer);
+            finish(true);
+            return;
+          }
+          if (process.platform === 'win32') {
+            clearInterval(timer);
+            finish(false);
+          }
+        });
+      }, 600);
+    });
+  });
+
+  child.stderr?.destroy();
+  child.unref();
+
+  if (!opened) {
+    child.kill();
+    const detail = stderr.trim() || 'port 15432 did not open';
+    logger.error({ detail, command: TUNNEL_COMMAND }, 'SSH tunnel failed');
+    throw new AppError(
+      502,
+      `SSH tunnel did not open (${detail}). This PC needs key login to ${TUNNEL_TARGET} — a password prompt cannot run from the Run button.`,
+    );
+  }
+
+  await resetVboxPool();
+  void pollRaw();
+  logger.info({ command: TUNNEL_COMMAND }, 'SSH tunnel open for trough 6');
+  return { open: true, alreadyOpen: false, command: TUNNEL_COMMAND };
+}
+
+let tunnelAttemptAt = 0;
+
+/** Bring the forward back after a dropped connection. The next poll reads the new pool. */
+async function reopenTunnel() {
+  if (Date.now() - tunnelAttemptAt < 20_000) return;
+  tunnelAttemptAt = Date.now();
+  try {
+    if (await localPortOpen(TUNNEL_PORT)) {
+      await resetVboxPool();
+      return;
+    }
+    await openSshTunnel();
+  } catch (err) {
+    logger.warn({ err }, 'SSH tunnel retry failed');
+  }
 }
 
 function disconnectClient() {
@@ -705,6 +856,12 @@ export const testVersionService = {
   async refreshDb() {
     await pollDb();
     return this.getStatus();
+  },
+
+  /** Trough 6 Run: SSH tunnel only. Does not publish the mock JSON session. */
+  async openTunnel() {
+    const tunnel = await openSshTunnel();
+    return { ...this.getStatus(), tunnel };
   },
 
   onShutdown() {
