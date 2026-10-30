@@ -26,6 +26,13 @@ export const createUserSchema = z.object({
 
 export const updateUserSchema = z.object({
   name: z.string().min(2).max(100).optional(),
+  email: z
+    .string()
+    .email()
+    .transform((v) => v.toLowerCase())
+    .optional(),
+  /** Omit to keep the current password. */
+  password: z.string().min(8).max(128).optional(),
   role: z.enum(UPDATABLE_ROLES).optional(),
   isActive: z.boolean().optional(),
   executiveConfig: executiveConfigSchema.optional(),

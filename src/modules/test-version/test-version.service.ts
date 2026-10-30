@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
@@ -49,6 +49,8 @@ export interface FeedStatusEvent {
 /** Live VNet feed, independent of the local mock publisher. */
 export interface RawLiveFeed {
   polledAt: string | null;
+  /** Trough 6 Run is held down: the SSH tunnel is the live session. */
+  watching: boolean;
   /** SSH tunnel / Postgres query succeeded. */
   dbConnected: boolean;
   /** Newest raw row is inside the fresh window (~2× the 10s cadence). */
@@ -59,6 +61,29 @@ export interface RawLiveFeed {
   count: number;
   rows: RawVboxRow[];
   statusLog: FeedStatusEvent[];
+}
+
+export type IntakeCell = string | number | boolean | null;
+export type IntakeTableName = 'sessions' | 'events' | 'time_series';
+
+/** Latest rows from one droplet table, column order matching `\d`. */
+export interface IntakeTableSnapshot {
+  columns: string[];
+  rows: Record<string, IntakeCell>[];
+  count: number;
+  latestAt: string | null;
+}
+
+/** Live copies of sessions, events, and time_series. */
+export interface IntakeSnapshot {
+  polledAt: string;
+  ok: boolean;
+  dbConnected: boolean;
+  updating: boolean;
+  error: string | null;
+  ageMs: number | null;
+  tunnelHint: string;
+  tables: Record<IntakeTableName, IntakeTableSnapshot>;
 }
 
 export interface PublisherStatus {
@@ -136,6 +161,7 @@ function loadTrough(troughId: string) {
 function emptyLive(): RawLiveFeed {
   return {
     polledAt: null,
+    watching: false,
     dbConnected: false,
     feedConnected: false,
     error: null,
@@ -197,6 +223,9 @@ let pool: Pool | null = null;
 let live: RawLiveFeed = emptyLive();
 let rawTimer: ReturnType<typeof setInterval> | null = null;
 let rawPollInFlight = false;
+/** True only between Trough 6 Run and Stop. */
+let watching = false;
+let tunnelChild: ChildProcess | null = null;
 
 function pushLog(entry: Omit<PublishLogEntry, 'at'> & { at?: string }) {
   const row: PublishLogEntry = { at: entry.at ?? new Date().toISOString(), ...entry };
@@ -374,29 +403,176 @@ function startDbPolling() {
   }, env.MQTT_PUBLISH_INTERVAL_MS);
 }
 
-function noteFeedTransition(nextConnected: boolean, reason: string) {
-  if (live.statusLog[0]?.state === (nextConnected ? 'connected' : 'disconnected') && live.polledAt) {
-    return;
-  }
-  // Skip the very first observation so startup does not look like a flap,
-  // unless we already have a log entry (a real change).
-  if (!live.polledAt && live.statusLog.length === 0) {
-    live.statusLog = [
-      {
-        at: new Date().toISOString(),
-        state: nextConnected ? 'connected' : 'disconnected',
-        reason,
-      },
-    ];
-    return;
-  }
-  if (live.feedConnected === nextConnected && live.polledAt) return;
-  live.statusLog = [
-    {
-      at: new Date().toISOString(),
-      state: nextConnected ? 'connected' : 'disconnected',
-      reason,
+const INTAKE_TABLES = ['sessions', 'events', 'time_series'] as const;
+const INTAKE_LIMITS: Record<IntakeTableName, number> = {
+  sessions: 20,
+  events: 40,
+  time_series: 40,
+};
+/** A table is "updating" when its newest inserted_at is inside this window. */
+const INTAKE_FRESH_MS = 25_000;
+
+function emptyIntakeTable(): IntakeTableSnapshot {
+  return { columns: [], rows: [], count: 0, latestAt: null };
+}
+
+function emptyIntake(error: string | null = null): IntakeSnapshot {
+  return {
+    polledAt: new Date().toISOString(),
+    ok: false,
+    dbConnected: false,
+    updating: false,
+    error,
+    ageMs: null,
+    tunnelHint: status.tunnelHint,
+    tables: {
+      sessions: emptyIntakeTable(),
+      events: emptyIntakeTable(),
+      time_series: emptyIntakeTable(),
     },
+  };
+}
+
+function asCell(value: unknown): IntakeCell {
+  if (value == null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  return JSON.stringify(value);
+}
+
+function parseJsonRow(value: unknown): Record<string, IntakeCell> {
+  let raw = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, IntakeCell> = {};
+  for (const [key, cell] of Object.entries(raw as Record<string, unknown>)) {
+    out[key] = asCell(cell);
+  }
+  return out;
+}
+
+/** Droplet timestamps are `timestamp without time zone` stored in UTC. */
+function parseDbTime(value: IntakeCell): number | null {
+  if (typeof value !== 'string' || !value) return null;
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const hasZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(normalized);
+  const ms = Date.parse(hasZone ? normalized : `${normalized}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+async function readIntake(): Promise<IntakeSnapshot> {
+  const db = getPool();
+  const [sessionsRes, eventsRes, seriesRes, countsRes, columnsRes] = await Promise.all([
+    db.query<{ row: unknown }>(
+      `SELECT row_to_json(s) AS row
+       FROM (SELECT * FROM sessions ORDER BY inserted_at DESC NULLS LAST LIMIT $1) s`,
+      [INTAKE_LIMITS.sessions],
+    ),
+    db.query<{ row: unknown }>(
+      `SELECT row_to_json(e) AS row
+       FROM (SELECT * FROM events ORDER BY inserted_at DESC NULLS LAST LIMIT $1) e`,
+      [INTAKE_LIMITS.events],
+    ),
+    db.query<{ row: unknown }>(
+      `SELECT row_to_json(t) AS row
+       FROM (SELECT * FROM time_series ORDER BY inserted_at DESC NULLS LAST LIMIT $1) t`,
+      [INTAKE_LIMITS.time_series],
+    ),
+    db.query<{ sessions: number; events: number; time_series: number }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM sessions) AS sessions,
+         (SELECT COUNT(*)::int FROM events) AS events,
+         (SELECT COUNT(*)::int FROM time_series) AS time_series`,
+    ),
+    db.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = ANY($1::text[])
+       ORDER BY table_name, ordinal_position`,
+      [[...INTAKE_TABLES]],
+    ),
+  ]);
+
+  const columns: Record<IntakeTableName, string[]> = {
+    sessions: [],
+    events: [],
+    time_series: [],
+  };
+  for (const col of columnsRes.rows) {
+    if (col.table_name === 'sessions' || col.table_name === 'events' || col.table_name === 'time_series') {
+      columns[col.table_name].push(col.column_name);
+    }
+  }
+
+  const counts = countsRes.rows[0] ?? { sessions: 0, events: 0, time_series: 0 };
+  const sources: Record<IntakeTableName, { row: unknown }[]> = {
+    sessions: sessionsRes.rows,
+    events: eventsRes.rows,
+    time_series: seriesRes.rows,
+  };
+
+  const tables = {} as IntakeSnapshot['tables'];
+  let newestMs: number | null = null;
+  for (const name of INTAKE_TABLES) {
+    const rows = sources[name].map((entry) => parseJsonRow(entry.row));
+    const latestRaw = rows[0]?.inserted_at;
+    const latestAt = typeof latestRaw === 'string' ? latestRaw : null;
+    const latestMs = parseDbTime(latestAt);
+    if (latestMs != null && (newestMs == null || latestMs > newestMs)) newestMs = latestMs;
+    tables[name] = {
+      columns: columns[name],
+      rows,
+      count: counts[name] ?? rows.length,
+      latestAt,
+    };
+  }
+
+  const ageMs = newestMs == null ? null : Date.now() - newestMs;
+  const updating = ageMs != null && ageMs >= -5_000 && ageMs <= INTAKE_FRESH_MS;
+
+  return {
+    polledAt: new Date().toISOString(),
+    ok: true,
+    dbConnected: true,
+    updating,
+    error: null,
+    ageMs,
+    tunnelHint: status.tunnelHint,
+    tables,
+  };
+}
+
+let intakeInFlight: Promise<IntakeSnapshot> | null = null;
+
+async function pollIntake(): Promise<IntakeSnapshot> {
+  if (intakeInFlight) return intakeInFlight;
+  intakeInFlight = (async () => {
+    try {
+      return await readIntake();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'DB poll failed';
+      await resetVboxPool();
+      return emptyIntake(`${message} — open the SSH tunnel to read withering_db.`);
+    }
+  })().finally(() => {
+    intakeInFlight = null;
+  });
+  return intakeInFlight;
+}
+
+function noteFeedTransition(nextConnected: boolean, reason: string) {
+  const state = nextConnected ? 'connected' : 'disconnected';
+  const latest = live.statusLog[0];
+  if (latest?.state === state && latest.reason === reason) return;
+  live.statusLog = [
+    { at: new Date().toISOString(), state, reason },
     ...live.statusLog,
   ].slice(0, MAX_STATUS_LOG);
 }
@@ -437,21 +613,23 @@ async function pollRaw() {
 
     const lastReceivedAt = rows[0]?.receivedAt ?? null;
     const ageMs = lastReceivedAt ? Date.now() - Date.parse(lastReceivedAt) : null;
-    const feedConnected = ageMs != null && ageMs >= -5_000 && ageMs <= FEED_FRESH_MS;
-    const reason = feedConnected
-      ? 'Sample arrived from VNet'
-      : lastReceivedAt
-        ? 'No new sample within 25s'
-        : 'raw_vbox_data is empty';
+    const fresh = ageMs != null && ageMs >= -5_000 && ageMs <= FEED_FRESH_MS;
+    const feedConnected = watching && fresh;
+    const reason = !watching
+      ? 'Trough 6 is not running'
+      : fresh
+        ? 'Sample arrived from VNet'
+        : 'Data is not being received';
 
     noteFeedTransition(feedConnected, reason);
 
     live = {
       ...live,
       polledAt: new Date().toISOString(),
+      watching,
       dbConnected: true,
       feedConnected,
-      error: null,
+      error: fresh || !watching ? null : 'Data is not being received. The VNet box may be off.',
       lastReceivedAt,
       ageMs,
       count: countRes.rows[0]?.n ?? rows.length,
@@ -460,20 +638,30 @@ async function pollRaw() {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'DB poll failed';
-    noteFeedTransition(false, 'Database unreachable');
+    noteFeedTransition(false, watching ? 'Database unreachable' : 'Trough 6 is not running');
     await resetVboxPool();
-    void reopenTunnel();
+    if (watching) void reopenTunnel();
     live = {
       ...live,
       polledAt: new Date().toISOString(),
+      watching,
       dbConnected: false,
       feedConnected: false,
-      error: `${message} — open SSH tunnel: ${status.tunnelHint}`,
+      error: watching ? `${message} — open SSH tunnel: ${status.tunnelHint}` : null,
       statusLog: live.statusLog,
     };
   } finally {
     rawPollInFlight = false;
   }
+}
+
+/** Wait out a poll already in flight, then read raw_vbox_data again. */
+async function pollRawNow() {
+  const started = Date.now();
+  while (rawPollInFlight && Date.now() - started < 8_000) {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  await pollRaw();
 }
 
 function stopRawTimer() {
@@ -554,6 +742,7 @@ async function openSshTunnel() {
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
+  tunnelChild = child;
 
   child.stderr?.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-600);
@@ -607,6 +796,7 @@ async function openSshTunnel() {
 
   if (!opened) {
     child.kill();
+    if (tunnelChild === child) tunnelChild = null;
     const detail = stderr.trim() || 'port 15432 did not open';
     logger.error({ detail, command: TUNNEL_COMMAND }, 'SSH tunnel failed');
     throw new AppError(
@@ -623,8 +813,63 @@ async function openSshTunnel() {
 
 let tunnelAttemptAt = 0;
 
-/** Bring the forward back after a dropped connection. The next poll reads the new pool. */
+function killPortListener(port: number): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => resolve();
+    if (process.platform === 'win32') {
+      execFile('netstat', ['-ano', '-p', 'tcp'], { windowsHide: true }, (err, stdout) => {
+        if (err || !stdout) return finish();
+        const pids = new Set<string>();
+        for (const line of stdout.split(/\r?\n/)) {
+          if (!line.includes(`:${port}`) || !/LISTENING/i.test(line)) continue;
+          const pid = line.trim().split(/\s+/).at(-1);
+          if (pid && /^\d+$/.test(pid) && pid !== '0' && pid !== String(process.pid)) pids.add(pid);
+        }
+        if (pids.size === 0) return finish();
+        let left = pids.size;
+        for (const pid of pids) {
+          execFile('taskkill', ['/PID', pid, '/F', '/T'], { windowsHide: true }, () => {
+            left -= 1;
+            if (left === 0) finish();
+          });
+        }
+      });
+      return;
+    }
+    execFile('sh', ['-c', `lsof -ti tcp:${port} | xargs -r kill`], () => finish());
+  });
+}
+
+/** Stop the Trough 6 session and close the SSH forward it opened. */
+async function closeSshTunnel() {
+  watching = false;
+  const child = tunnelChild;
+  tunnelChild = null;
+  if (child && !child.killed) {
+    try {
+      child.kill();
+    } catch {
+      /* process already exited */
+    }
+  }
+  await killPortListener(TUNNEL_PORT);
+  await resetVboxPool();
+  noteFeedTransition(false, 'Trough 6 stopped');
+  live = {
+    ...live,
+    watching: false,
+    dbConnected: false,
+    feedConnected: false,
+    error: null,
+    polledAt: new Date().toISOString(),
+    statusLog: live.statusLog,
+  };
+  logger.info('SSH tunnel closed — trough 6 stopped');
+}
+
+/** Bring the forward back only while Trough 6 Run is still held. */
 async function reopenTunnel() {
+  if (!watching) return;
   if (Date.now() - tunnelAttemptAt < 20_000) return;
   tunnelAttemptAt = Date.now();
   try {
@@ -853,15 +1098,41 @@ export const testVersionService = {
     return this.getStatus();
   },
 
+  /** Read raw_vbox_data immediately and return the latest sample. */
   async refreshDb() {
-    await pollDb();
+    await pollRawNow();
     return this.getStatus();
+  },
+
+  /** Latest sessions, events, and time_series rows from the droplet. */
+  intake() {
+    return pollIntake();
+  },
+
+  /** Open the SSH tunnel if needed, then read the three intake tables. */
+  async connectIntake() {
+    await openSshTunnel();
+    return pollIntake();
   },
 
   /** Trough 6 Run: SSH tunnel only. Does not publish the mock JSON session. */
   async openTunnel() {
-    const tunnel = await openSshTunnel();
-    return { ...this.getStatus(), tunnel };
+    watching = true;
+    try {
+      const tunnel = await openSshTunnel();
+      void pollRaw();
+      return { ...this.getStatus(), tunnel };
+    } catch (err) {
+      watching = false;
+      live = { ...live, watching: false, feedConnected: false };
+      throw err;
+    }
+  },
+
+  /** Trough 6 Stop: close the SSH tunnel and drop the live session. */
+  async closeTunnel() {
+    await closeSshTunnel();
+    return this.getStatus();
   },
 
   onShutdown() {

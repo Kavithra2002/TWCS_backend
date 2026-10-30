@@ -14,7 +14,8 @@ export const authService = {
     if (!valid) throw unauthorized('Invalid email or password');
 
     const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
-    return { token: signToken(authUser, remember ? '30d' : undefined), user: authUser };
+    const profile = await usersApi.getById(user.id);
+    return { token: signToken(authUser, remember ? '30d' : undefined), user: profile };
   },
 
   me: (userId: string) => usersApi.getById(userId),

@@ -28,7 +28,19 @@ export const testVersionController = {
     res.json(await testVersionService.refreshDb());
   }),
 
+  intake: asyncHandler(async (_req, res) => {
+    res.json(await testVersionService.intake());
+  }),
+
+  connectIntake: asyncHandler(async (_req, res) => {
+    res.json(await testVersionService.connectIntake());
+  }),
+
   openTunnel: asyncHandler(async (_req, res) => {
     res.json(await testVersionService.openTunnel());
+  }),
+
+  closeTunnel: asyncHandler(async (_req, res) => {
+    res.json(await testVersionService.closeTunnel());
   }),
 };
