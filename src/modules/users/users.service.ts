@@ -67,6 +67,15 @@ export const usersService = {
   async update(id: string, input: UpdateUserInput) {
     const existing = await this.getById(id);
 
+    if (existing.role === 'super_admin' && input.role && input.role !== 'super_admin') {
+      throw badRequest('The Super admin role cannot be changed');
+    }
+
+    if (input.email && input.email !== existing.email) {
+      const taken = await usersRepository.findByEmailWithHash(input.email);
+      if (taken && taken.id !== id) throw conflict('Email already in use');
+    }
+
     if (input.executiveConfig !== undefined) {
       if (existing.role !== 'executive' && input.role !== 'executive') {
         throw badRequest('Executive settings can only be applied to Executive users');
@@ -76,9 +85,14 @@ export const usersService = {
 
     const data: Prisma.UserUpdateInput = {
       name: input.name,
+      email: input.email,
       role: input.role,
       isActive: input.isActive,
     };
+
+    if (input.password) {
+      data.passwordHash = await bcrypt.hash(input.password, 10);
+    }
 
     if (input.executiveConfig !== undefined) {
       data.executiveConfig = input.executiveConfig;
@@ -87,6 +101,10 @@ export const usersService = {
     // Clear executive settings if the account is moved off the executive role.
     if (input.role && input.role !== 'executive' && existing.role === 'executive') {
       data.executiveConfig = Prisma.DbNull;
+    }
+
+    if (input.role === 'executive' && existing.role !== 'executive' && input.executiveConfig === undefined) {
+      data.executiveConfig = DEFAULT_EXECUTIVE_CONFIG;
     }
 
     return toPublicUser(await usersRepository.update(id, data));
